@@ -49,6 +49,7 @@ import org.quantumbadger.redreader.activities.BugReportActivity;
 import org.quantumbadger.redreader.activities.ChangelogActivity;
 import org.quantumbadger.redreader.activities.HtmlViewActivity;
 import org.quantumbadger.redreader.cache.CacheManager;
+import org.quantumbadger.redreader.common.Alarms;
 import org.quantumbadger.redreader.common.AndroidCommon;
 import org.quantumbadger.redreader.common.Constants;
 import org.quantumbadger.redreader.common.DialogUtils;
@@ -244,17 +245,22 @@ public final class SettingsFragment extends PreferenceFragmentCompat {
 
 					final Activity activity = getActivity();
 
-					if (activity instanceof BaseActivity) {
-						// Delay this because the preference hasn't taken effect yet
-						AndroidCommon.UI_THREAD_HANDLER.postDelayed(() -> {
+					// Delay this because the preference hasn't taken effect yet
+					AndroidCommon.UI_THREAD_HANDLER.postDelayed(() -> {
+
+						if (activity instanceof BaseActivity) {
 							AndroidCommon.promptForNotificationPermission(
 									(BaseActivity) activity,
-									() -> {
-										notifPref.setChecked(false);
-									}
+									() -> notifPref.setChecked(false)
 							);
-						}, 300);
-					}
+						}
+
+						// Reconcile the background message-checker alarm with the
+						// now-updated notification preference (the single source of truth).
+						if (activity != null) {
+							Alarms.reconcile(activity);
+						}
+					}, 300);
 
 					return true;
 				});

@@ -82,7 +82,7 @@ class RedReader : Application() {
             }
         }.start()
 
-		Alarms.onBoot(this)
+		Alarms.reconcile(this)
         AnnouncementDownloader.performDownload(this)
         NewMessageChecker.checkForNewMessages(this)
     }

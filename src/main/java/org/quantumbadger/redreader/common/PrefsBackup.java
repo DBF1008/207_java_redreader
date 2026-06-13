@@ -402,6 +402,14 @@ public final class PrefsBackup {
 
 						Log.i(TAG, "Restore complete");
 					});
+
+					// Re-apply runtime side effects that depend on preferences, so they match the
+					// freshly-restored values (the single source of truth). Without this, the
+					// background message-checker alarm and Tor routing would stay out of sync until
+					// the next app or device restart.
+					Alarms.reconcile(activity);
+					AndroidCommon.runOnUiThread(TorCommon::updateTorStatus);
+
 					onSuccess.run();
 				};
 

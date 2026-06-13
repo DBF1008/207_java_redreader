@@ -194,6 +194,9 @@ object AndroidCommon {
 			},
 			{
 				PrefsUtility.set_pref_behaviour_notifications(false)
+				// The preference is the single source of truth for the message-checker alarm, so
+				// stop it now that notifications have been turned off.
+				Alarms.reconcile(activity)
 				onDisabled?.run()
 			}
 		)
