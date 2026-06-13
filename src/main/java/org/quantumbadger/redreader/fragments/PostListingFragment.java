@@ -30,6 +30,7 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
+import androidx.annotation.VisibleForTesting;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -117,6 +118,14 @@ public class PostListingFragment extends RRFragment
 	@Nullable private RedditSubreddit mSubreddit;
 
 	private UUID mSession;
+
+	// The account that was the default when this page was created. The whole
+	// lifecycle of this page (initial load, pagination, subreddit metadata,
+	// comment precaching, subscribe/unsubscribe) is bound to this account so the
+	// page stays internally consistent even if the user switches the default
+	// account while it is still alive.
+	@NonNull private final RedditAccount mAccount;
+
 	private final int mPostCountLimit;
 	private TextView mLoadMoreView;
 
@@ -169,6 +178,9 @@ public class PostListingFragment extends RRFragment
 		mSession = session;
 
 		final Context context = getContext();
+
+		// Bind this page to the current default account (see field documentation).
+		mAccount = RedditAccountManager.getInstance(context).getDefaultAccount();
 
 		// TODO output failed URL
 		if(mPostListingURL == null) {
@@ -258,7 +270,7 @@ public class PostListingFragment extends RRFragment
 
 		mRequest = createPostListingRequest(
 				UriString.from(mPostListingURL.generateJsonUri()),
-				RedditAccountManager.getInstance(context).getDefaultAccount(),
+				mAccount,
 				session,
 				downloadStrategy,
 				true);
@@ -352,10 +364,7 @@ public class PostListingFragment extends RRFragment
 
 						try {
 							RedditSubredditManager
-									.getInstance(
-											getActivity(),
-											RedditAccountManager.getInstance(getActivity())
-													.getDefaultAccount())
+									.getInstance(getActivity(), mAccount)
 									.getSubreddit(
 											new SubredditCanonicalId(
 													subredditPostListURL.subreddit),
@@ -503,9 +512,38 @@ public class PostListingFragment extends RRFragment
 		}.start();
 	}
 
+	/**
+	 * Returns whether a post listing page bound to {@code boundAccount} has been
+	 * superseded because the current default account is now
+	 * {@code currentDefaultAccount}.
+	 *
+	 * <p>Each page is tied to the account that was the default when it was created.
+	 * Once the default account changes to a different account, the page is stale:
+	 * the hosting activity rebuilds the listing for the new account, and this page
+	 * must stop issuing requests so it cannot mix posts or cache entries across
+	 * accounts (the cache is keyed by username).
+	 */
+	@VisibleForTesting
+	static boolean isPostListingAccountStale(
+			@NonNull final RedditAccount boundAccount,
+			@NonNull final RedditAccount currentDefaultAccount) {
+		return !boundAccount.equals(currentDefaultAccount);
+	}
+
 	private void onLoadMoreItemsCheck() {
 
 		General.checkThisIsUIThread();
+
+		if(isPostListingAccountStale(
+				mAccount,
+				RedditAccountManager.getInstance(getActivity()).getDefaultAccount())) {
+			// The default account changed since this page was created, so this page
+			// has been superseded. The hosting activity refreshes the listing on
+			// account changes (creating a new fragment bound to the new account),
+			// so this now-orphaned page must not issue any further requests bound
+			// to the old account.
+			return;
+		}
 
 		if(mReadyToDownloadMore && mAfter != null && !mAfter.equals(mLastAfter)) {
 
@@ -532,8 +570,7 @@ public class PostListingFragment extends RRFragment
 
 				mRequest = createPostListingRequest(
 						UriString.from(newUri),
-						RedditAccountManager.getInstance(getActivity())
-								.getDefaultAccount(),
+						mAccount,
 						mSession,
 						strategy,
 						false);
@@ -567,10 +604,7 @@ public class PostListingFragment extends RRFragment
 
 		try {
 			RedditSubredditSubscriptionManager
-					.getSingleton(
-							getActivity(),
-							RedditAccountManager.getInstance(getActivity())
-									.getDefaultAccount())
+					.getSingleton(getActivity(), mAccount)
 					.subscribe(
 							new SubredditCanonicalId(
 									mPostListingURL.asSubredditPostListURL().subreddit),
@@ -588,10 +622,7 @@ public class PostListingFragment extends RRFragment
 
 		try {
 			RedditSubredditSubscriptionManager
-					.getSingleton(
-							getActivity(),
-							RedditAccountManager.getInstance(getActivity())
-									.getDefaultAccount())
+					.getSingleton(getActivity(), mAccount)
 					.unsubscribe(mSubreddit.getCanonicalId(), getActivity());
 		} catch(final InvalidSubredditNameException e) {
 			throw new RuntimeException(e);
@@ -990,7 +1021,7 @@ public class PostListingFragment extends RRFragment
 		CacheManager.getInstance(activity)
 				.makeRequest(new CacheRequest(
 						url,
-						RedditAccountManager.getInstance(activity).getDefaultAccount(),
+						mAccount,
 						null,
 						new Priority(
 								Constants.Priority.COMMENT_PRECACHE,
