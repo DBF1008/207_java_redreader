@@ -40,14 +40,15 @@ import org.quantumbadger.redreader.reddit.kthings.RedditIdAndType;
 import org.quantumbadger.redreader.reddit.kthings.RedditPost;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.SortedMap;
-import java.util.TreeMap;
 
 public final class RedditChangeDataManager {
 
@@ -57,6 +58,22 @@ public final class RedditChangeDataManager {
 
 	private static final HashMap<RedditAccount, RedditChangeDataManager> INSTANCE_MAP
 			= new HashMap<>();
+
+	// Package-private listener for testing persistence notifications.
+	// Production code should NOT register listeners here; use RedditChangeDataIO directly.
+	interface PrunePersistenceListener {
+		void onDataChanged();
+	}
+
+	private static PrunePersistenceListener sTestPruneListener;
+
+	static void setPrunePersistenceListenerForTesting(final PrunePersistenceListener listener) {
+		sTestPruneListener = listener;
+	}
+
+	static void removePrunePersistenceListenerForTesting() {
+		sTestPruneListener = null;
+	}
 
 	@NonNull
 	public static RedditChangeDataManager getInstance(final RedditAccount user) {
@@ -71,6 +88,13 @@ public final class RedditChangeDataManager {
 			}
 
 			return result;
+		}
+	}
+
+	// Clears all per-user instances. Test-only – do not call from production code.
+	static void clearAllInstancesForTesting() {
+		synchronized(INSTANCE_MAP) {
+			INSTANCE_MAP.clear();
 		}
 	}
 
@@ -617,16 +641,25 @@ public final class RedditChangeDataManager {
 		final TimestampUTC now = TimestampUTC.now();
 		final TimestampUTC timestampBoundary = now.subtract(maxAge);
 
+		boolean anyRemoved = false;
+
 		synchronized(mLock) {
-			final Iterator<Map.Entry<RedditIdAndType, Entry>> iterator =
-					mEntries.entrySet().iterator();
-			final SortedMap<TimestampUTC, RedditIdAndType> byTimestamp = new TreeMap<>();
 
-			while(iterator.hasNext()) {
+			// Collect all entries into a list sorted by timestamp.
+			// Using ArrayList (instead of the previous TreeMap) to handle entries
+			// with identical timestamps correctly – TreeMap used compareTo()==0
+			// as equality and silently dropped duplicate-timestamp entries,
+			// breaking the MAX_ENTRY_COUNT safeguard.
+			final List<Map.Entry<RedditIdAndType, Entry>> sortedEntries =
+					new ArrayList<>(mEntries.entrySet());
+			Collections.sort(sortedEntries,
+					Comparator.comparing(e -> e.getValue().mTimestamp));
 
-				final Map.Entry<RedditIdAndType, Entry> entry = iterator.next();
+			final List<RedditIdAndType> toRemove = new ArrayList<>();
+
+			// Phase 1: Time-based pruning – remove all entries older than maxAge.
+			for(final Map.Entry<RedditIdAndType, Entry> entry : sortedEntries) {
 				final TimestampUTC timestamp = entry.getValue().mTimestamp;
-				byTimestamp.put(timestamp, entry.getKey());
 
 				if(timestamp.isLessThan(timestampBoundary)) {
 
@@ -638,30 +671,51 @@ public final class RedditChangeDataManager {
 									2
 							)));
 
-					iterator.remove();
+					toRemove.add(entry.getKey());
 				}
 			}
 
-			// Limit total number of entries to limit our memory usage. This is meant as a
-			// safeguard, as the time-based pruning above should have removed enough already.
-			final Iterator<Map.Entry<TimestampUTC, RedditIdAndType>> iter2 =
-					byTimestamp.entrySet().iterator();
-			while(iter2.hasNext()) {
-				if(mEntries.size() <= MAX_ENTRY_COUNT) {
-					break;
+			// Phase 2: Count-based eviction – evict oldest remaining entries
+			// until total count is within MAX_ENTRY_COUNT. sortedEntries is
+			// already in oldest-first order, so we iterate from the front,
+			// skipping entries that were already removed by time-based pruning.
+			if(mEntries.size() - toRemove.size() > MAX_ENTRY_COUNT) {
+				for(final Map.Entry<RedditIdAndType, Entry> entry : sortedEntries) {
+					if(mEntries.size() - toRemove.size() <= MAX_ENTRY_COUNT) {
+						break;
+					}
+
+					if(toRemove.contains(entry.getKey())) {
+						continue;
+					}
+
+					Log.i(TAG, String.format(
+							"Evicting '%s' (%s old)",
+							entry.getKey(),
+							now.elapsedPeriodSince(entry.getValue().mTimestamp).format(
+									TimeStringsDebug.INSTANCE,
+									2
+							)));
+
+					toRemove.add(entry.getKey());
 				}
+			}
 
-				final Map.Entry<TimestampUTC, RedditIdAndType> entry = iter2.next();
+			// Apply all removals to the in-memory map.
+			for(final RedditIdAndType id : toRemove) {
+				mEntries.remove(id);
+			}
 
-				Log.i(TAG, String.format(
-						"Evicting '%s' (%s old)",
-						entry.getValue(),
-						now.elapsedPeriodSince(entry.getKey()).format(
-								TimeStringsDebug.INSTANCE,
-								2
-						)));
+			anyRemoved = !toRemove.isEmpty();
+		}
 
-				mEntries.remove(entry.getValue());
+		// Persist deletions to disk so pruned entries don't resurrect on
+		// the next cold start.
+		if(anyRemoved) {
+			RedditChangeDataIO.notifyUpdateStatic();
+
+			if(sTestPruneListener != null) {
+				sTestPruneListener.onDataChanged();
 			}
 		}
 	}
