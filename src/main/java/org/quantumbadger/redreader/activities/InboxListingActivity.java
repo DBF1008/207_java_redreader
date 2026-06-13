@@ -58,6 +58,7 @@ import org.quantumbadger.redreader.common.datastream.SeekableInputStream;
 import org.quantumbadger.redreader.common.time.TimeDuration;
 import org.quantumbadger.redreader.common.time.TimestampUTC;
 import org.quantumbadger.redreader.http.FailedRequestBody;
+import org.quantumbadger.redreader.receivers.NewMessageChecker;
 import org.quantumbadger.redreader.reddit.APIResponseHandler;
 import org.quantumbadger.redreader.reddit.RedditAPI;
 import org.quantumbadger.redreader.reddit.kthings.JsonUtils;
@@ -107,6 +108,10 @@ public final class InboxListingActivity extends ViewsBaseActivity {
 
 	private RRThemeAttributes mTheme;
 	private RedditChangeDataManager mChangeDataManager;
+
+	/** The account this inbox is displaying. Resolved from notification intent
+	 *  extra if available, otherwise falls back to the current default account. */
+	private RedditAccount mAccount;
 
 	private final Handler itemHandler = new Handler(Looper.getMainLooper()) {
 		@Override
@@ -170,9 +175,27 @@ public final class InboxListingActivity extends ViewsBaseActivity {
 		PrefsUtility.applyTheme(this);
 		super.onCreate(savedInstanceState);
 
+		// Resolve the account: if we were launched from a notification, use the
+		// account that the notification was for. Otherwise fall back to the
+		// current default account.
+		final RedditAccountManager accountManager
+				= RedditAccountManager.getInstance(this);
+		if(getIntent() != null) {
+			final String notifAccount = getIntent().getStringExtra(
+					NewMessageChecker.EXTRA_ACCOUNT_USERNAME);
+			if(notifAccount != null && !notifAccount.isEmpty()) {
+				final RedditAccount resolved = accountManager.getAccount(notifAccount);
+				if(resolved != null && resolved.isNotAnonymous()) {
+					// Switch the default account so that all subsequent API
+					// calls and UI state use the correct account.
+					accountManager.setDefaultAccount(resolved);
+				}
+			}
+		}
+
+		mAccount = accountManager.getDefaultAccount();
 		mTheme = new RRThemeAttributes(this);
-		mChangeDataManager = RedditChangeDataManager.getInstance(
-				RedditAccountManager.getInstance(this).getDefaultAccount());
+		mChangeDataManager = RedditChangeDataManager.getInstance(mAccount);
 
 		final SharedPrefsWrapper sharedPreferences
 				= General.getSharedPrefs(this);
@@ -241,8 +264,7 @@ public final class InboxListingActivity extends ViewsBaseActivity {
 
 	private void makeFirstRequest(final Context context) {
 
-		final RedditAccount user = RedditAccountManager.getInstance(context)
-				.getDefaultAccount();
+		final RedditAccount user = mAccount;
 		final CacheManager cm = CacheManager.getInstance(context);
 
 		final UriString url;
@@ -507,7 +529,7 @@ public final class InboxListingActivity extends ViewsBaseActivity {
 										error);
 							}
 						},
-						RedditAccountManager.getInstance(this).getDefaultAccount(),
+						mAccount,
 						this);
 
 				return true;

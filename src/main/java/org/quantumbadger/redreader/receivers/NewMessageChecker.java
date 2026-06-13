@@ -73,6 +73,39 @@ public class NewMessageChecker extends BroadcastReceiver {
 	public static final String PREFS_SAVED_MESSAGE_ID = "LastMessageId";
 	public static final String PREFS_SAVED_MESSAGE_TIMESTAMP = "LastMessageTimestamp";
 
+	/** Intent extra key for passing the account username from notification to InboxActivity. */
+	public static final String EXTRA_ACCOUNT_USERNAME = "NewMessageChecker_AccountUsername";
+
+	/**
+	 * Returns the per-account SharedPreferences key for the last-seen message ID.
+	 * Each account gets its own key so that switching default accounts does not
+	 * cause cross-account dedup contamination.
+	 *
+	 * @param canonicalUsername the canonical (lowercased) username, never null
+	 * @return a key like {@code "LastMessageId_someuser"}
+	 */
+	public static String getMessageIdPrefKey(@NonNull final String canonicalUsername) {
+		return PREFS_SAVED_MESSAGE_ID + "_" + canonicalUsername;
+	}
+
+	/**
+	 * Returns the per-account SharedPreferences key for the last-seen message timestamp.
+	 *
+	 * @param canonicalUsername the canonical (lowercased) username, never null
+	 * @return a key like {@code "LastMessageTimestamp_someuser"}
+	 */
+	public static String getMessageTimestampPrefKey(@NonNull final String canonicalUsername) {
+		return PREFS_SAVED_MESSAGE_TIMESTAMP + "_" + canonicalUsername;
+	}
+
+	/**
+	 * Returns a stable, unique notification ID per account so that notifications
+	 * from different accounts don't overwrite each other.
+	 */
+	public static int getNotificationId(@NonNull final String canonicalUsername) {
+		return canonicalUsername.hashCode();
+	}
+
 
 	@Override
 	public void onReceive(final Context context, final Intent intent) {
@@ -202,15 +235,17 @@ public class NewMessageChecker extends BroadcastReceiver {
 							}
 
 							// Check if the previously saved message is the same as the one we
-							// just received
+							// just received. Use per-account keys to prevent
+							// cross-account dedup contamination.
 
 							final SharedPrefsWrapper prefs
 									= General.getSharedPrefs(context);
+							final String accountKey = user.getCanonicalUsername();
 							final String oldMessageId = prefs.getString(
-									PREFS_SAVED_MESSAGE_ID,
+									getMessageIdPrefKey(accountKey),
 									"");
 							final long oldMessageTimestamp = prefs.getLong(
-									PREFS_SAVED_MESSAGE_TIMESTAMP,
+									getMessageTimestampPrefKey(accountKey),
 									0);
 
 							if(oldMessageId == null || (!messageID.getValue().equals(oldMessageId)
@@ -220,9 +255,11 @@ public class NewMessageChecker extends BroadcastReceiver {
 								Log.e(TAG, "New messages detected. Showing notification.");
 
 								prefs.edit()
-										.putString(PREFS_SAVED_MESSAGE_ID, messageID.getValue())
+										.putString(
+												getMessageIdPrefKey(accountKey),
+												messageID.getValue())
 										.putLong(
-												PREFS_SAVED_MESSAGE_TIMESTAMP,
+												getMessageTimestampPrefKey(accountKey),
 												messageTimestamp.toUtcSecs())
 										.apply();
 
@@ -231,7 +268,7 @@ public class NewMessageChecker extends BroadcastReceiver {
 											R.string.notification_message_multiple);
 								}
 
-								createNotification(title, text, context);
+								createNotification(title, text, context, accountKey);
 
 							} else {
 								Log.e(TAG, "All messages have been previously seen.");
@@ -258,6 +295,16 @@ public class NewMessageChecker extends BroadcastReceiver {
 			final String title,
 			final String text,
 			final Context context) {
+
+		// Backwards-compatible overload: no account context available.
+		createNotification(title, text, context, null);
+	}
+
+	public static void createNotification(
+			final String title,
+			final String text,
+			final Context context,
+			@Nullable final String accountUsername) {
 
 		final NotificationManager nm = (NotificationManager)context.getSystemService(
 				Context.NOTIFICATION_SERVICE);
@@ -305,14 +352,33 @@ public class NewMessageChecker extends BroadcastReceiver {
 
 		final Intent intent = new Intent(context, InboxListingActivity.class);
 
+		// Pass the account username so InboxListingActivity knows which account
+		// this notification belongs to, avoiding cross-account confusion.
+		if(accountUsername != null) {
+			intent.putExtra(EXTRA_ACCOUNT_USERNAME, accountUsername);
+		}
+
 		int flags = 0;
 
 		if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
 			flags |= PendingIntent.FLAG_IMMUTABLE;
 		}
 
-		notification.setContentIntent(PendingIntent.getActivity(context, 0, intent, flags));
+		// Use a per-account request code so that PendingIntents for different
+		// accounts don't clobber each other.
+		final int requestCode = accountUsername != null
+				? accountUsername.hashCode()
+				: 0;
 
-		nm.notify(0, notification.getNotification());
+		notification.setContentIntent(PendingIntent.getActivity(
+				context, requestCode, intent, flags));
+
+		// Use per-account notification ID so that one account's notification
+		// does not overwrite another account's notification.
+		final int notificationId = accountUsername != null
+				? getNotificationId(accountUsername)
+				: 0;
+
+		nm.notify(notificationId, notification.getNotification());
 	}
 }
