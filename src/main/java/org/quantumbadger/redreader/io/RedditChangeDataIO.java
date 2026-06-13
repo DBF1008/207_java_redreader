@@ -21,6 +21,7 @@ import android.annotation.SuppressLint;
 import android.content.Context;
 import android.util.Log;
 import androidx.annotation.NonNull;
+import androidx.annotation.VisibleForTesting;
 import org.quantumbadger.redreader.common.TriggerableThread;
 import org.quantumbadger.redreader.reddit.prepared.RedditChangeDataManager;
 
@@ -65,6 +66,16 @@ public class RedditChangeDataIO {
 		} else {
 			STATIC_UPDATE_PENDING = true;
 		}
+	}
+
+	// Returns whether a static update has been requested since the last call, and resets the
+	// flag. Only used by tests to verify that operations such as pruning request a write while
+	// no IO instance exists yet (which is the case before the initial read completes).
+	@VisibleForTesting
+	public static synchronized boolean consumeStaticUpdatePending() {
+		final boolean result = STATIC_UPDATE_PENDING;
+		STATIC_UPDATE_PENDING = false;
+		return result;
 	}
 
 	private final Context mContext;

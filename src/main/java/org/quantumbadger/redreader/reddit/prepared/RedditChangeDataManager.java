@@ -21,6 +21,7 @@ import android.content.Context;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.VisibleForTesting;
 
 import org.quantumbadger.redreader.account.RedditAccount;
 import org.quantumbadger.redreader.account.RedditAccountManager;
@@ -40,14 +41,12 @@ import org.quantumbadger.redreader.reddit.kthings.RedditIdAndType;
 import org.quantumbadger.redreader.reddit.kthings.RedditPost;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.SortedMap;
-import java.util.TreeMap;
 
 public final class RedditChangeDataManager {
 
@@ -612,57 +611,101 @@ public final class RedditChangeDataManager {
 		}
 	}
 
+	// Determines which entries should be removed by a prune pass. This is pure (no shared
+	// state) so it can be unit tested directly. Entries older than the boundary are removed,
+	// then, as a memory safeguard, the oldest of the remaining entries are evicted until no
+	// more than maxEntryCount remain. Entries that share an identical timestamp are each
+	// considered individually (a map keyed by timestamp would collapse them, preventing us
+	// from evicting enough of the oldest entries).
+	@VisibleForTesting
+	@NonNull
+	static Set<RedditIdAndType> selectEntriesToPrune(
+			@NonNull final Map<RedditIdAndType, TimestampUTC> timestampsById,
+			@NonNull final TimestampUTC olderThanBoundary,
+			final int maxEntryCount) {
+
+		final HashSet<RedditIdAndType> toRemove = new HashSet<>();
+
+		for(final Map.Entry<RedditIdAndType, TimestampUTC> entry : timestampsById.entrySet()) {
+			if(entry.getValue().isLessThan(olderThanBoundary)) {
+				toRemove.add(entry.getKey());
+			}
+		}
+
+		final int excess = (timestampsById.size() - toRemove.size()) - maxEntryCount;
+
+		if(excess > 0) {
+
+			final ArrayList<Map.Entry<RedditIdAndType, TimestampUTC>> survivors
+					= new ArrayList<>(timestampsById.size());
+
+			for(final Map.Entry<RedditIdAndType, TimestampUTC> entry
+					: timestampsById.entrySet()) {
+
+				if(!toRemove.contains(entry.getKey())) {
+					survivors.add(entry);
+				}
+			}
+
+			survivors.sort((final Map.Entry<RedditIdAndType, TimestampUTC> a,
+					final Map.Entry<RedditIdAndType, TimestampUTC> b) -> {
+
+				final int byTimestamp = a.getValue().compareTo(b.getValue());
+
+				if(byTimestamp != 0) {
+					return byTimestamp;
+				}
+
+				return a.getKey().getValue().compareTo(b.getKey().getValue());
+			});
+
+			for(int i = 0; i < excess; i++) {
+				toRemove.add(survivors.get(i).getKey());
+			}
+		}
+
+		return toRemove;
+	}
+
 	private void prune(final TimeDuration maxAge) {
 
 		final TimestampUTC now = TimestampUTC.now();
 		final TimestampUTC timestampBoundary = now.subtract(maxAge);
 
+		final boolean changed;
+
 		synchronized(mLock) {
-			final Iterator<Map.Entry<RedditIdAndType, Entry>> iterator =
-					mEntries.entrySet().iterator();
-			final SortedMap<TimestampUTC, RedditIdAndType> byTimestamp = new TreeMap<>();
 
-			while(iterator.hasNext()) {
+			final HashMap<RedditIdAndType, TimestampUTC> timestampsById
+					= new HashMap<>(mEntries.size());
 
-				final Map.Entry<RedditIdAndType, Entry> entry = iterator.next();
-				final TimestampUTC timestamp = entry.getValue().mTimestamp;
-				byTimestamp.put(timestamp, entry.getKey());
-
-				if(timestamp.isLessThan(timestampBoundary)) {
-
-					Log.i(TAG, String.format(
-							"Pruning '%s' (%s old)",
-							entry.getKey(),
-							now.elapsedPeriodSince(timestamp).format(
-									TimeStringsDebug.INSTANCE,
-									2
-							)));
-
-					iterator.remove();
-				}
+			for(final Map.Entry<RedditIdAndType, Entry> entry : mEntries.entrySet()) {
+				timestampsById.put(entry.getKey(), entry.getValue().mTimestamp);
 			}
 
-			// Limit total number of entries to limit our memory usage. This is meant as a
-			// safeguard, as the time-based pruning above should have removed enough already.
-			final Iterator<Map.Entry<TimestampUTC, RedditIdAndType>> iter2 =
-					byTimestamp.entrySet().iterator();
-			while(iter2.hasNext()) {
-				if(mEntries.size() <= MAX_ENTRY_COUNT) {
-					break;
-				}
+			final Set<RedditIdAndType> toRemove
+					= selectEntriesToPrune(timestampsById, timestampBoundary, MAX_ENTRY_COUNT);
 
-				final Map.Entry<TimestampUTC, RedditIdAndType> entry = iter2.next();
+			for(final RedditIdAndType thing : toRemove) {
 
 				Log.i(TAG, String.format(
-						"Evicting '%s' (%s old)",
-						entry.getValue(),
-						now.elapsedPeriodSince(entry.getKey()).format(
+						Locale.US,
+						"Pruning '%s' (%s old)",
+						thing,
+						now.elapsedPeriodSince(timestampsById.get(thing)).format(
 								TimeStringsDebug.INSTANCE,
-								2
-						)));
+								2)));
 
-				mEntries.remove(entry.getValue());
+				mEntries.remove(thing);
 			}
+
+			changed = !toRemove.isEmpty();
+		}
+
+		// Persist the result of pruning. Without this, entries removed here would remain on
+		// disk and "revive" on the next cold start when the data file is read back in.
+		if(changed) {
+			RedditChangeDataIO.notifyUpdateStatic();
 		}
 	}
 }
