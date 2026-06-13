@@ -49,6 +49,7 @@ import org.quantumbadger.redreader.activities.BugReportActivity;
 import org.quantumbadger.redreader.activities.ChangelogActivity;
 import org.quantumbadger.redreader.activities.HtmlViewActivity;
 import org.quantumbadger.redreader.cache.CacheManager;
+import org.quantumbadger.redreader.common.Alarms;
 import org.quantumbadger.redreader.common.AndroidCommon;
 import org.quantumbadger.redreader.common.Constants;
 import org.quantumbadger.redreader.common.DialogUtils;
@@ -251,8 +252,19 @@ public final class SettingsFragment extends PreferenceFragmentCompat {
 									(BaseActivity) activity,
 									() -> {
 										notifPref.setChecked(false);
+										// The onDisabled callback sets the pref
+										// back to false; reconcile again to stop
+										// the alarm.
+										Alarms.reconcile(activity);
 									}
 							);
+							// Reconcile alarm state now that the preference has
+							// been committed. If the prompt returns early (e.g.
+							// notifications disabled, permission already granted,
+							// or anonymous user) this is sufficient. If the user
+							// later denies the permission, the onDisabled callback
+							// above will reconcile again.
+							Alarms.reconcile(activity);
 						}, 300);
 					}
 

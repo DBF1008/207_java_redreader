@@ -35,6 +35,6 @@ public class BootReceiver extends BroadcastReceiver {
 			return;
 		}
 
-		Alarms.onBoot(context);
+		Alarms.reconcile(context);
 	}
 }

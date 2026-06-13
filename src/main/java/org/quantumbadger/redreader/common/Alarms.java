@@ -24,6 +24,8 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.util.Log;
+
 import org.quantumbadger.redreader.receivers.NewMessageChecker;
 import org.quantumbadger.redreader.receivers.RegularCachePruner;
 
@@ -31,6 +33,9 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class Alarms {
+
+	private static final String TAG = "Alarms";
+
 	private static final Map<Alarm, AlarmManager> alarmMap = new HashMap<>();
 	private static final Map<Alarm, PendingIntent> intentMap = new HashMap<>();
 
@@ -101,6 +106,8 @@ public class Alarms {
 
 			alarmMap.put(alarm, alarmManager);
 			intentMap.put(alarm, pendingIntent);
+
+			Log.i(TAG, "Started alarm: " + alarm.name());
 		}
 	}
 
@@ -115,20 +122,108 @@ public class Alarms {
 			alarmMap.get(alarm).cancel(intentMap.get(alarm));
 			alarmMap.remove(alarm);
 			intentMap.remove(alarm);
+			Log.i(TAG, "Stopped alarm: " + alarm.name());
 		}
 	}
 
 	/**
-	 * Starts all alarms that are supposed to start at device boot
+	 * Returns whether the specified alarm is currently running.
 	 *
-	 * @param context
+	 * @param alarm the alarm to check
+	 * @return true if the alarm is currently scheduled
 	 */
+	public static boolean isAlarmRunning(final Alarm alarm) {
+		return alarmMap.containsKey(alarm);
+	}
 
-	public static void onBoot(final Context context) {
+	/**
+	 * Determines whether a given alarm <em>should</em> be running based on current
+	 * preference values. This is the single source of truth for the mapping between
+	 * preference state and alarm side-effects.
+	 *
+	 * <p>Currently:
+	 * <ul>
+	 *   <li>{@code MESSAGE_CHECKER} runs only when
+	 *       {@link PrefsUtility#pref_behaviour_notifications()} is {@code true}.</li>
+	 *   <li>All other alarms that have {@code startOnBoot} set run unconditionally.</li>
+	 * </ul>
+	 *
+	 * @param alarm the alarm to evaluate
+	 * @return true if the alarm should be running
+	 */
+	static boolean shouldAlarmRun(final Alarm alarm) {
+		return shouldAlarmRun(alarm, PrefsUtility.pref_behaviour_notifications());
+	}
+
+	/**
+	 * Pure (side-effect free) overload that decides whether an alarm should run
+	 * given explicit preference values. Package-private for testing.
+	 *
+	 * @param alarm the alarm to evaluate
+	 * @param notificationsEnabled whether the user has notifications enabled
+	 * @return true if the alarm should be running
+	 */
+	static boolean shouldAlarmRun(final Alarm alarm, final boolean notificationsEnabled) {
+		if(!alarm.startOnBoot()) {
+			return false;
+		}
+
+		switch(alarm) {
+			case MESSAGE_CHECKER:
+				return notificationsEnabled;
+			default:
+				return true;
+		}
+	}
+
+	/**
+	 * Clears all tracked alarm state. Package-private; intended for use by unit tests only.
+	 */
+	static void resetForTesting() {
+		alarmMap.clear();
+		intentMap.clear();
+	}
+
+	/**
+	 * Reconciles the actual alarm state with the desired state derived from current
+	 * preference values. Alarms that should be running but aren't will be started;
+	 * alarms that are running but shouldn't be will be stopped.
+	 *
+	 * <p>This is the single entry-point for syncing preference-driven side-effects.
+	 * It must be called:
+	 * <ul>
+	 *   <li>On application startup ({@code RedReader.onCreate()})</li>
+	 *   <li>On device boot ({@code BootReceiver})</li>
+	 *   <li>After any preference change that may affect alarm state
+	 *       (e.g. notification toggle in settings)</li>
+	 *   <li>After a preference backup restore</li>
+	 * </ul>
+	 *
+	 * @param context application or activity context
+	 */
+	public static void reconcile(final Context context) {
 		for(final Alarm alarm : Alarm.values()) {
-			if(alarm.startOnBoot()) {
+			final boolean shouldRun = shouldAlarmRun(alarm);
+			final boolean isRunning = isAlarmRunning(alarm);
+
+			if(shouldRun && !isRunning) {
+				Log.i(TAG, "Reconcile: starting alarm " + alarm.name());
 				startAlarm(alarm, context);
+			} else if(!shouldRun && isRunning) {
+				Log.i(TAG, "Reconcile: stopping alarm " + alarm.name());
+				stopAlarm(alarm);
 			}
 		}
+	}
+
+	/**
+	 * Starts all alarms that are supposed to start at device boot.
+	 *
+	 * @param context
+	 * @deprecated Use {@link #reconcile(Context)} instead, which respects preference state.
+	 */
+	@Deprecated
+	public static void onBoot(final Context context) {
+		reconcile(context);
 	}
 }

@@ -402,6 +402,15 @@ public final class PrefsBackup {
 
 						Log.i(TAG, "Restore complete");
 					});
+
+					// Replay runtime side-effects that depend on preference values.
+					// These must run on the UI thread (TorCommon checks this).
+					AndroidCommon.UI_THREAD_HANDLER.post(() -> {
+						Log.i(TAG, "Reconciling preference-driven side-effects after restore");
+						Alarms.reconcile(activity);
+						TorCommon.updateTorStatus();
+					});
+
 					onSuccess.run();
 				};
 
