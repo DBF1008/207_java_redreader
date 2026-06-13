@@ -93,6 +93,8 @@ public final class InboxListingActivity extends ViewsBaseActivity {
 		INBOX, SENT, MODMAIL
 	}
 
+	public static final String EXTRA_ACCOUNT_USERNAME = "accountUsername";
+
 	private static final String PREF_ONLY_UNREAD = "inbox_only_show_unread";
 
 	private GroupedRecyclerViewAdapter adapter;
@@ -107,6 +109,7 @@ public final class InboxListingActivity extends ViewsBaseActivity {
 
 	private RRThemeAttributes mTheme;
 	private RedditChangeDataManager mChangeDataManager;
+	private RedditAccount mUser;
 
 	private final Handler itemHandler = new Handler(Looper.getMainLooper()) {
 		@Override
@@ -171,8 +174,28 @@ public final class InboxListingActivity extends ViewsBaseActivity {
 		super.onCreate(savedInstanceState);
 
 		mTheme = new RRThemeAttributes(this);
-		mChangeDataManager = RedditChangeDataManager.getInstance(
-				RedditAccountManager.getInstance(this).getDefaultAccount());
+
+		final RedditAccountManager accountManager = RedditAccountManager.getInstance(this);
+
+		// Prefer the account that the launching notification was generated for, so the inbox is
+		// rendered for that account rather than whichever account happens to be the default now.
+		RedditAccount user = null;
+
+		if(getIntent() != null) {
+			final String accountUsername
+					= getIntent().getStringExtra(EXTRA_ACCOUNT_USERNAME);
+
+			if(accountUsername != null) {
+				user = accountManager.getAccount(accountUsername);
+			}
+		}
+
+		if(user == null) {
+			user = accountManager.getDefaultAccount();
+		}
+
+		mUser = user;
+		mChangeDataManager = RedditChangeDataManager.getInstance(mUser);
 
 		final SharedPrefsWrapper sharedPreferences
 				= General.getSharedPrefs(this);
@@ -241,8 +264,7 @@ public final class InboxListingActivity extends ViewsBaseActivity {
 
 	private void makeFirstRequest(final Context context) {
 
-		final RedditAccount user = RedditAccountManager.getInstance(context)
-				.getDefaultAccount();
+		final RedditAccount user = mUser;
 		final CacheManager cm = CacheManager.getInstance(context);
 
 		final UriString url;
@@ -507,7 +529,7 @@ public final class InboxListingActivity extends ViewsBaseActivity {
 										error);
 							}
 						},
-						RedditAccountManager.getInstance(this).getDefaultAccount(),
+						mUser,
 						this);
 
 				return true;

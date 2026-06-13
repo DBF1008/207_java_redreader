@@ -40,6 +40,7 @@ import java.io.OutputStream;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 
@@ -63,6 +64,10 @@ public final class PrefsBackup {
 
 	@NonNull private static final HashSet<String> IGNORED_PREFS = new HashSet<>();
 
+	// Per-account keys whose names start with one of these prefixes are also excluded, since the
+	// account's canonical username is appended at runtime and so the full key cannot be listed.
+	@NonNull private static final HashSet<String> IGNORED_PREFS_PREFIXES = new HashSet<>();
+
 	static {
 		IGNORED_PREFS.add(AnnouncementDownloader.PREF_KEY_LAST_READ_ID);
 		IGNORED_PREFS.add(AnnouncementDownloader.PREF_KEY_PAYLOAD_STORAGE_HEX);
@@ -70,6 +75,9 @@ public final class PrefsBackup {
 		IGNORED_PREFS.add(NewMessageChecker.PREFS_SAVED_MESSAGE_TIMESTAMP);
 		IGNORED_PREFS.add(FeatureFlagHandler.PREF_LAST_VERSION);
 		IGNORED_PREFS.add(FeatureFlagHandler.PREF_FIRST_RUN_MESSAGE_SHOWN);
+
+		IGNORED_PREFS_PREFIXES.add(NewMessageChecker.PREFS_SAVED_MESSAGE_ID_PREFIX);
+		IGNORED_PREFS_PREFIXES.add(NewMessageChecker.PREFS_SAVED_MESSAGE_TIMESTAMP_PREFIX);
 	}
 
 	public interface BackupDestination {
@@ -95,6 +103,17 @@ public final class PrefsBackup {
 
 			for(final String ignoredPref : IGNORED_PREFS) {
 				prefMap.remove(ignoredPref);
+			}
+
+			final Iterator<String> prefKeyIterator = prefMap.keySet().iterator();
+			while(prefKeyIterator.hasNext()) {
+				final String key = prefKeyIterator.next();
+				for(final String ignoredPrefix : IGNORED_PREFS_PREFIXES) {
+					if(key.startsWith(ignoredPrefix)) {
+						prefKeyIterator.remove();
+						break;
+					}
+				}
 			}
 
 			final HashMap<String, Object> map = new HashMap<>();

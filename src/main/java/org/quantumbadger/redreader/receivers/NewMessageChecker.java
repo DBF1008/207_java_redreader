@@ -61,6 +61,7 @@ import org.quantumbadger.redreader.reddit.kthings.RedditThing;
 import org.quantumbadger.redreader.reddit.kthings.UrlEncodedString;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -70,9 +71,74 @@ public class NewMessageChecker extends BroadcastReceiver {
 
 	private static final String NOTIFICATION_CHANNEL_ID = "RRNewMessageChecker";
 
+	// Legacy global keys (used before per-account isolation). Retained only so that
+	// PrefsBackup continues to exclude any stale values left over from older installs.
 	public static final String PREFS_SAVED_MESSAGE_ID = "LastMessageId";
 	public static final String PREFS_SAVED_MESSAGE_TIMESTAMP = "LastMessageTimestamp";
 
+	// Per-account keys: the account's canonical username is appended to these prefixes so that
+	// each account tracks its own "last notified message" state independently of the others.
+	public static final String PREFS_SAVED_MESSAGE_ID_PREFIX = "LastMessageId_";
+	public static final String PREFS_SAVED_MESSAGE_TIMESTAMP_PREFIX = "LastMessageTimestamp_";
+
+	@NonNull
+	public static String getSavedMessageIdPrefKey(
+			@NonNull final String accountCanonicalUsername) {
+
+		return PREFS_SAVED_MESSAGE_ID_PREFIX + accountCanonicalUsername;
+	}
+
+	@NonNull
+	public static String getSavedMessageTimestampPrefKey(
+			@NonNull final String accountCanonicalUsername) {
+
+		return PREFS_SAVED_MESSAGE_TIMESTAMP_PREFIX + accountCanonicalUsername;
+	}
+
+	// Side-effect-free decision (kept separate so it can be unit tested directly): whether the
+	// supplied message should trigger a notification, given the message id/timestamp previously
+	// saved for the *same* account.
+	public static boolean isNewMessage(
+			@Nullable final String savedMessageId,
+			final long savedMessageTimestamp,
+			@NonNull final String newMessageId,
+			final long newMessageTimestamp) {
+
+		return savedMessageId == null
+				|| (!newMessageId.equals(savedMessageId)
+						&& savedMessageTimestamp <= newMessageTimestamp);
+	}
+
+	// Reads the per-account saved message state, decides whether to notify, and (only if so)
+	// persists the new state for that account. Returns true if a notification should be shown.
+	public static boolean checkAndUpdateLastMessage(
+			@NonNull final SharedPrefsWrapper prefs,
+			@NonNull final String accountCanonicalUsername,
+			@NonNull final String newMessageId,
+			final long newMessageTimestamp) {
+
+		final String idKey = getSavedMessageIdPrefKey(accountCanonicalUsername);
+		final String timestampKey = getSavedMessageTimestampPrefKey(accountCanonicalUsername);
+
+		final String savedMessageId = prefs.getString(idKey, "");
+		final long savedMessageTimestamp = prefs.getLong(timestampKey, 0);
+
+		if(isNewMessage(
+				savedMessageId,
+				savedMessageTimestamp,
+				newMessageId,
+				newMessageTimestamp)) {
+
+			prefs.edit()
+					.putString(idKey, newMessageId)
+					.putLong(timestampKey, newMessageTimestamp)
+					.apply();
+
+			return true;
+		}
+
+		return false;
+	}
 
 	@Override
 	public void onReceive(final Context context, final Intent intent) {
@@ -89,10 +155,10 @@ public class NewMessageChecker extends BroadcastReceiver {
 			return;
 		}
 
-		final RedditAccount user;
+		final List<RedditAccount> accounts;
 
 		try {
-			user = RedditAccountManager.getInstance(context).getDefaultAccount();
+			accounts = RedditAccountManager.getInstance(context).getAccounts();
 
 		} catch(final SQLiteDatabaseCorruptException e) {
 			// Avoid background crash
@@ -100,9 +166,18 @@ public class NewMessageChecker extends BroadcastReceiver {
 			return;
 		}
 
-		if(user.isAnonymous()) {
-			return;
+		// Each account is checked against its own saved state, so switching the default account
+		// can no longer cause one account's notifications to be suppressed or duplicated.
+		for(final RedditAccount account : accounts) {
+			if(account.isNotAnonymous()) {
+				checkForNewMessages(context, account);
+			}
 		}
+	}
+
+	private static void checkForNewMessages(
+			final Context context,
+			@NonNull final RedditAccount user) {
 
 		final CacheManager cm = CacheManager.getInstance(context);
 
@@ -201,37 +276,22 @@ public class NewMessageChecker extends BroadcastReceiver {
 								throw new RuntimeException("Unknown item in list.");
 							}
 
-							// Check if the previously saved message is the same as the one we
-							// just received
-
-							final SharedPrefsWrapper prefs
-									= General.getSharedPrefs(context);
-							final String oldMessageId = prefs.getString(
-									PREFS_SAVED_MESSAGE_ID,
-									"");
-							final long oldMessageTimestamp = prefs.getLong(
-									PREFS_SAVED_MESSAGE_TIMESTAMP,
-									0);
-
-							if(oldMessageId == null || (!messageID.getValue().equals(oldMessageId)
-									&& oldMessageTimestamp
-											<= messageTimestamp.toUtcSecs())) {
+							// Decide (per-account) whether this is a new message worth notifying
+							// about, persisting the updated state only if it is.
+							if(checkAndUpdateLastMessage(
+									General.getSharedPrefs(context),
+									user.getCanonicalUsername(),
+									messageID.getValue(),
+									messageTimestamp.toUtcSecs())) {
 
 								Log.e(TAG, "New messages detected. Showing notification.");
-
-								prefs.edit()
-										.putString(PREFS_SAVED_MESSAGE_ID, messageID.getValue())
-										.putLong(
-												PREFS_SAVED_MESSAGE_TIMESTAMP,
-												messageTimestamp.toUtcSecs())
-										.apply();
 
 								if(messageCount > 1) {
 									title = context.getString(
 											R.string.notification_message_multiple);
 								}
 
-								createNotification(title, text, context);
+								createNotification(title, text, context, user);
 
 							} else {
 								Log.e(TAG, "All messages have been previously seen.");
@@ -257,7 +317,8 @@ public class NewMessageChecker extends BroadcastReceiver {
 	public static void createNotification(
 			final String title,
 			final String text,
-			final Context context) {
+			final Context context,
+			@Nullable final RedditAccount account) {
 
 		final NotificationManager nm = (NotificationManager)context.getSystemService(
 				Context.NOTIFICATION_SERVICE);
@@ -305,14 +366,33 @@ public class NewMessageChecker extends BroadcastReceiver {
 
 		final Intent intent = new Intent(context, InboxListingActivity.class);
 
+		// Carry the source account so that tapping the notification opens that account's inbox,
+		// even if the default account has changed since the notification was posted.
+		if(account != null) {
+			intent.putExtra(InboxListingActivity.EXTRA_ACCOUNT_USERNAME, account.username);
+		}
+
+		// Distinct id per account so that simultaneous notifications for different accounts do
+		// not overwrite each other. Reused as the PendingIntent request code so that each
+		// pending intent retains its own account extra.
+		final int notificationId = account == null ? 0 : getNotificationId(account);
+
 		int flags = 0;
 
 		if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
 			flags |= PendingIntent.FLAG_IMMUTABLE;
 		}
 
-		notification.setContentIntent(PendingIntent.getActivity(context, 0, intent, flags));
+		notification.setContentIntent(PendingIntent.getActivity(
+				context,
+				notificationId,
+				intent,
+				flags));
 
-		nm.notify(0, notification.getNotification());
+		nm.notify(notificationId, notification.getNotification());
+	}
+
+	private static int getNotificationId(@NonNull final RedditAccount account) {
+		return account.getCanonicalUsername().hashCode();
 	}
 }

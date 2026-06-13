@@ -283,7 +283,8 @@ public final class SettingsFragment extends PreferenceFragmentCompat {
 				NewMessageChecker.createNotification(
 						"Test notification title",
 						"Test notification message",
-						context
+						context,
+						null
 				);
 				return true;
 			});
