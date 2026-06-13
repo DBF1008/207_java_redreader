@@ -558,7 +558,7 @@ public class RedditAPICommentAction {
 		}
 
 		final boolean wasUpvoted = changeDataManager.isUpvoted(comment.getIdAndType());
-		final boolean wasDownvoted = changeDataManager.isUpvoted(comment.getIdAndType());
+		final boolean wasDownvoted = changeDataManager.isDownvoted(comment.getIdAndType());
 
 		switch(action) {
 			case RedditAPI.ACTION_DOWNVOTE:
@@ -655,6 +655,7 @@ public class RedditAPICommentAction {
 											TimestampUTC.now(),
 											comment.getIdAndType());
 								}
+								break;
 							case RedditAPI.ACTION_SAVE:
 								changeDataManager.markSaved(
 										TimestampUTC.now(),
