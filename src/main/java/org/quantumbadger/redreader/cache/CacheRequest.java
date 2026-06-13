@@ -41,6 +41,8 @@ import java.util.UUID;
 
 public final class CacheRequest implements Comparable<CacheRequest> {
 
+	private static final String TAG = "CacheRequest";
+
 	public enum DownloadQueueType {
 		REDDIT_API,
 		IMGUR_API,
@@ -80,11 +82,15 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 	public final boolean cache;
 
 	@Nullable private CacheDownload download;
-	private boolean cancelled;
+	private volatile boolean cancelled;
 
 	public final Context context;
 
 	private final CacheRequestCallbacks mCallbacks;
+
+	public boolean isCancelled() {
+		return cancelled;
+	}
 
 	// Called by CacheDownload
 	synchronized boolean setDownload(final CacheDownload download) {
@@ -243,7 +249,7 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 	// Callbacks
 
 	private void onCallbackException(@NonNull final Throwable t) {
-		Log.e("CacheRequest", "Exception thrown from callback", t);
+		Log.e(TAG, "Exception thrown from callback", t);
 		BugReportActivity.handleGlobalError(context, t);
 	}
 
@@ -253,6 +259,11 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 			@NonNull final UUID session,
 			final boolean fromCache,
 			@Nullable final String mimetype) {
+
+		if(cancelled) {
+			Log.i(TAG, "notifyDataStreamAvailable() suppressed: request cancelled");
+			return;
+		}
 
 		mCallbacks.onDataStreamAvailable(streamFactory, timestamp, session, fromCache, mimetype);
 	}
@@ -264,10 +275,20 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 			final boolean fromCache,
 			@Nullable final String mimetype) {
 
+		if(cancelled) {
+			Log.i(TAG, "notifyDataStreamComplete() suppressed: request cancelled");
+			return;
+		}
+
 		mCallbacks.onDataStreamComplete(streamFactory, timestamp, session, fromCache, mimetype);
 	}
 
 	public void notifyFailure(@NonNull final RRError error) {
+
+		if(cancelled) {
+			Log.i(TAG, "notifyFailure() suppressed: request cancelled");
+			return;
+		}
 
 		try {
 			mCallbacks.onFailure(error);
@@ -281,6 +302,9 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 			final boolean authorizationInProgress,
 			final long bytesRead,
 			final long totalBytes) {
+		if(cancelled) {
+			return;
+		}
 		try {
 			mCallbacks.onProgress(authorizationInProgress, bytesRead, totalBytes);
 		} catch(final Throwable t) {
@@ -294,6 +318,10 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 			final UUID session,
 			final boolean fromCache,
 			final String mimetype) {
+		if(cancelled) {
+			Log.i(TAG, "notifyCacheFileWritten() suppressed: request cancelled");
+			return;
+		}
 		try {
 			mCallbacks.onCacheFileWritten(cacheFile, timestamp, session, fromCache, mimetype);
 		} catch(final Throwable t) {
@@ -302,16 +330,20 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 	}
 
 	public void notifyDownloadNecessary() {
+		if(cancelled) {
+			Log.i(TAG, "notifyDownloadNecessary() suppressed: request cancelled");
+			return;
+		}
 		try {
 			mCallbacks.onDownloadNecessary();
 		} catch(final Throwable t1) {
 
-			Log.e("CacheRequest", "Exception thrown by onDownloadNecessary", t1);
+			Log.e(TAG, "Exception thrown by onDownloadNecessary", t1);
 
 			try {
 				onCallbackException(t1);
 			} catch(final Throwable t2) {
-				Log.e("CacheRequest", "Exception thrown by onCallbackException", t2);
+				Log.e(TAG, "Exception thrown by onCallbackException", t2);
 				BugReportActivity.addGlobalError(new RRError(null, null, true, t1));
 				BugReportActivity.handleGlobalError(context, t2);
 			}
@@ -319,16 +351,20 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 	}
 
 	public void notifyDownloadStarted() {
+		if(cancelled) {
+			Log.i(TAG, "notifyDownloadStarted() suppressed: request cancelled");
+			return;
+		}
 		try {
 			mCallbacks.onDownloadStarted();
 		} catch(final Throwable t1) {
 
-			Log.e("CacheRequest", "Exception thrown by onDownloadStarted", t1);
+			Log.e(TAG, "Exception thrown by onDownloadStarted", t1);
 
 			try {
 				onCallbackException(t1);
 			} catch(final Throwable t2) {
-				Log.e("CacheRequest", "Exception thrown by onCallbackException", t2);
+				Log.e(TAG, "Exception thrown by onCallbackException", t2);
 				BugReportActivity.addGlobalError(new RRError(null, null, true, t1));
 				BugReportActivity.handleGlobalError(context, t2);
 			}

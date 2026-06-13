@@ -605,6 +605,11 @@ public final class CacheManager {
 
 		private void handleRequest(final CacheRequest request) {
 
+			if(request.isCancelled()) {
+				Log.i(TAG, "Skipping cancelled request in handleRequest()");
+				return;
+			}
+
 			if(request.url == null) {
 				request.notifyFailure(General.getGeneralErrorForFailure(
 						context,
@@ -714,6 +719,10 @@ public final class CacheManager {
 
 				@Override
 				public void run() {
+
+					if(request.isCancelled()) {
+						return;
+					}
 
 					final GenericFactory<SeekableInputStream, IOException> streamFactory = () -> {
 						final SeekableInputStream stream

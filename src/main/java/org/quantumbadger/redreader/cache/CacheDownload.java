@@ -266,7 +266,7 @@ public final class CacheDownload extends PrioritisedCachedThreadPool.Task {
 
 				// Save it to the cache
 
-				if(mInitiator.cache) {
+				if(mInitiator.cache && !mCancelled) {
 
 					@NonNull final CacheManager.WritableCacheFile writableCacheFile;
 
