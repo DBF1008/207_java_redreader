@@ -80,7 +80,11 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 	public final boolean cache;
 
 	@Nullable private CacheDownload download;
-	private boolean cancelled;
+
+	// Written under synchronization in cancel(), but read (without locking) from the
+	// download threads that dispatch the callbacks below, so it must be volatile to
+	// guarantee that a cancellation is visible to those threads.
+	private volatile boolean cancelled;
 
 	public final Context context;
 
@@ -254,6 +258,10 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 			final boolean fromCache,
 			@Nullable final String mimetype) {
 
+		if(cancelled) {
+			return;
+		}
+
 		mCallbacks.onDataStreamAvailable(streamFactory, timestamp, session, fromCache, mimetype);
 	}
 
@@ -264,10 +272,18 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 			final boolean fromCache,
 			@Nullable final String mimetype) {
 
+		if(cancelled) {
+			return;
+		}
+
 		mCallbacks.onDataStreamComplete(streamFactory, timestamp, session, fromCache, mimetype);
 	}
 
 	public void notifyFailure(@NonNull final RRError error) {
+
+		if(cancelled) {
+			return;
+		}
 
 		try {
 			mCallbacks.onFailure(error);
@@ -281,6 +297,10 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 			final boolean authorizationInProgress,
 			final long bytesRead,
 			final long totalBytes) {
+		if(cancelled) {
+			return;
+		}
+
 		try {
 			mCallbacks.onProgress(authorizationInProgress, bytesRead, totalBytes);
 		} catch(final Throwable t) {
@@ -294,6 +314,10 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 			final UUID session,
 			final boolean fromCache,
 			final String mimetype) {
+		if(cancelled) {
+			return;
+		}
+
 		try {
 			mCallbacks.onCacheFileWritten(cacheFile, timestamp, session, fromCache, mimetype);
 		} catch(final Throwable t) {
@@ -302,6 +326,10 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 	}
 
 	public void notifyDownloadNecessary() {
+		if(cancelled) {
+			return;
+		}
+
 		try {
 			mCallbacks.onDownloadNecessary();
 		} catch(final Throwable t1) {
@@ -319,6 +347,10 @@ public final class CacheRequest implements Comparable<CacheRequest> {
 	}
 
 	public void notifyDownloadStarted() {
+		if(cancelled) {
+			return;
+		}
+
 		try {
 			mCallbacks.onDownloadStarted();
 		} catch(final Throwable t1) {
