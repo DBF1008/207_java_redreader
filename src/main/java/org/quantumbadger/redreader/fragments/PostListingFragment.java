@@ -139,6 +139,14 @@ public class PostListingFragment extends RRFragment
 
 	private Integer mPreviousFirstVisibleItemPosition;
 
+	/**
+	 * The Reddit account bound to this fragment at construction time.
+	 * All requests (initial load, pagination, subscribe/unsubscribe, precache)
+	 * must use this account to prevent cross-account context mixing when the
+	 * user switches the default account while this fragment is still alive.
+	 */
+	@NonNull private final RedditAccount mBoundAccount;
+
 	// Session may be null
 	public PostListingFragment(
 			final AppCompatActivity parent,
@@ -148,6 +156,8 @@ public class PostListingFragment extends RRFragment
 			final boolean forceDownload) {
 
 		super(parent, savedInstanceState);
+
+		mBoundAccount = RedditAccountManager.getInstance(parent).getDefaultAccount();
 
 		mPostListingManager = new PostListingManager(parent);
 
@@ -258,7 +268,7 @@ public class PostListingFragment extends RRFragment
 
 		mRequest = createPostListingRequest(
 				UriString.from(mPostListingURL.generateJsonUri()),
-				RedditAccountManager.getInstance(context).getDefaultAccount(),
+				mBoundAccount,
 				session,
 				downloadStrategy,
 				true);
@@ -354,8 +364,7 @@ public class PostListingFragment extends RRFragment
 							RedditSubredditManager
 									.getInstance(
 											getActivity(),
-											RedditAccountManager.getInstance(getActivity())
-													.getDefaultAccount())
+											mBoundAccount)
 									.getSubreddit(
 											new SubredditCanonicalId(
 													subredditPostListURL.subreddit),
@@ -532,8 +541,7 @@ public class PostListingFragment extends RRFragment
 
 				mRequest = createPostListingRequest(
 						UriString.from(newUri),
-						RedditAccountManager.getInstance(getActivity())
-								.getDefaultAccount(),
+						mBoundAccount,
 						mSession,
 						strategy,
 						false);
@@ -569,8 +577,7 @@ public class PostListingFragment extends RRFragment
 			RedditSubredditSubscriptionManager
 					.getSingleton(
 							getActivity(),
-							RedditAccountManager.getInstance(getActivity())
-									.getDefaultAccount())
+							mBoundAccount)
 					.subscribe(
 							new SubredditCanonicalId(
 									mPostListingURL.asSubredditPostListURL().subreddit),
@@ -590,8 +597,7 @@ public class PostListingFragment extends RRFragment
 			RedditSubredditSubscriptionManager
 					.getSingleton(
 							getActivity(),
-							RedditAccountManager.getInstance(getActivity())
-									.getDefaultAccount())
+							mBoundAccount)
 					.unsubscribe(mSubreddit.getCanonicalId(), getActivity());
 		} catch(final InvalidSubredditNameException e) {
 			throw new RuntimeException(e);
@@ -601,6 +607,28 @@ public class PostListingFragment extends RRFragment
 	@NonNull
 	public PostListingURL getPostListingURL() {
 		return mPostListingURL;
+	}
+
+	/**
+	 * Returns the Reddit account that was bound to this fragment at creation time.
+	 * All requests within this fragment use this account, ensuring consistent
+	 * account context even if the user switches the default account.
+	 */
+	@NonNull
+	public RedditAccount getBoundAccount() {
+		return mBoundAccount;
+	}
+
+	/**
+	 * Checks whether the account bound to this fragment still matches the
+	 * current default account. Returns true if they differ, indicating the
+	 * fragment's data may no longer reflect the user's active account.
+	 */
+	public boolean isAccountStale() {
+		final RedditAccount currentDefault = RedditAccountManager
+				.getInstance(getActivity())
+				.getDefaultAccount();
+		return !mBoundAccount.equals(currentDefault);
 	}
 
 	@Nullable
@@ -990,7 +1018,7 @@ public class PostListingFragment extends RRFragment
 		CacheManager.getInstance(activity)
 				.makeRequest(new CacheRequest(
 						url,
-						RedditAccountManager.getInstance(activity).getDefaultAccount(),
+						mBoundAccount,
 						null,
 						new Priority(
 								Constants.Priority.COMMENT_PRECACHE,
