@@ -48,6 +48,7 @@ import org.quantumbadger.redreader.fragments.CommentPropertiesDialog;
 import org.quantumbadger.redreader.reddit.APIResponseHandler;
 import org.quantumbadger.redreader.reddit.RedditAPI;
 import org.quantumbadger.redreader.reddit.kthings.RedditComment;
+import org.quantumbadger.redreader.reddit.kthings.RedditIdAndType;
 import org.quantumbadger.redreader.reddit.prepared.RedditChangeDataManager;
 import org.quantumbadger.redreader.reddit.prepared.RedditRenderableComment;
 import org.quantumbadger.redreader.reddit.url.UserProfileURL;
@@ -543,6 +544,53 @@ public class RedditAPICommentAction {
 		}
 	}
 
+	/**
+	 * Reverts the optimistic change applied for {@code action} when the request fails.
+	 *
+	 * <p>Only the field(s) actually touched by {@code action} are restored: vote actions
+	 * restore the previous vote direction, save/unsave actions restore the previous saved
+	 * state. A vote failure must never touch the saved state, and vice versa.
+	 */
+	public static void revertOnFailure(
+			final RedditChangeDataManager changeDataManager,
+			final RedditIdAndType idAndType,
+			final @RedditAPI.RedditAction int action,
+			final boolean wasUpvoted,
+			final boolean wasDownvoted) {
+
+		switch(action) {
+			case RedditAPI.ACTION_DOWNVOTE:
+			case RedditAPI.ACTION_UNVOTE:
+			case RedditAPI.ACTION_UPVOTE:
+				if(wasUpvoted) {
+					changeDataManager.markUpvoted(TimestampUTC.now(), idAndType);
+				} else if(wasDownvoted) {
+					changeDataManager.markDownvoted(TimestampUTC.now(), idAndType);
+				} else {
+					changeDataManager.markUnvoted(TimestampUTC.now(), idAndType);
+				}
+				break;
+
+			case RedditAPI.ACTION_SAVE:
+				changeDataManager.markSaved(TimestampUTC.now(), idAndType, false);
+				break;
+
+			case RedditAPI.ACTION_UNSAVE:
+				changeDataManager.markSaved(TimestampUTC.now(), idAndType, true);
+				break;
+
+			case RedditAPI.ACTION_DELETE:
+			case RedditAPI.ACTION_REPORT:
+				// No need to update the change data manager
+				break;
+
+			case RedditAPI.ACTION_HIDE:
+			case RedditAPI.ACTION_UNHIDE:
+				// These don't apply to comments
+				break;
+		}
+	}
+
 	public static void action(
 			final AppCompatActivity activity,
 			final RedditComment comment,
@@ -558,7 +606,7 @@ public class RedditAPICommentAction {
 		}
 
 		final boolean wasUpvoted = changeDataManager.isUpvoted(comment.getIdAndType());
-		final boolean wasDownvoted = changeDataManager.isUpvoted(comment.getIdAndType());
+		final boolean wasDownvoted = changeDataManager.isDownvoted(comment.getIdAndType());
 
 		switch(action) {
 			case RedditAPI.ACTION_DOWNVOTE:
@@ -638,46 +686,12 @@ public class RedditAPICommentAction {
 
 					private void revertOnFailure() {
 
-						switch(action) {
-							case RedditAPI.ACTION_DOWNVOTE:
-							case RedditAPI.ACTION_UNVOTE:
-							case RedditAPI.ACTION_UPVOTE:
-								if(wasUpvoted) {
-									changeDataManager.markUpvoted(
-											TimestampUTC.now(),
-											comment.getIdAndType());
-								} else if(wasDownvoted) {
-									changeDataManager.markDownvoted(
-											TimestampUTC.now(),
-											comment.getIdAndType());
-								} else {
-									changeDataManager.markUnvoted(
-											TimestampUTC.now(),
-											comment.getIdAndType());
-								}
-							case RedditAPI.ACTION_SAVE:
-								changeDataManager.markSaved(
-										TimestampUTC.now(),
-										comment.getIdAndType(),
-										false);
-								break;
-							case RedditAPI.ACTION_UNSAVE:
-								changeDataManager.markSaved(
-										TimestampUTC.now(),
-										comment.getIdAndType(),
-										true);
-								break;
-
-							case RedditAPI.ACTION_DELETE:
-							case RedditAPI.ACTION_REPORT:
-								// No need to update the change data manager
-								break;
-
-							case RedditAPI.ACTION_HIDE:
-							case RedditAPI.ACTION_UNHIDE:
-								// These don't apply to comments
-								break;
-						}
+						RedditAPICommentAction.revertOnFailure(
+								changeDataManager,
+								comment.getIdAndType(),
+								action,
+								wasUpvoted,
+								wasDownvoted);
 					}
 
 				}, user, comment.getIdAndType(), action, activity);

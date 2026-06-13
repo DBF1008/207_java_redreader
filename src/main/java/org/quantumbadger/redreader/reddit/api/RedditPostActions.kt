@@ -56,6 +56,7 @@ import org.quantumbadger.redreader.reddit.APIResponseHandler.ActionResponseHandl
 import org.quantumbadger.redreader.reddit.RedditAPI
 import org.quantumbadger.redreader.reddit.RedditAPI.RedditAction
 import org.quantumbadger.redreader.reddit.api.RedditPostActions.ActionDescriptionPair.Companion.from
+import org.quantumbadger.redreader.reddit.kthings.RedditIdAndType
 import org.quantumbadger.redreader.reddit.prepared.RedditChangeDataManager
 import org.quantumbadger.redreader.reddit.prepared.RedditPreparedPost
 import org.quantumbadger.redreader.reddit.things.InvalidSubredditNameException
@@ -1059,6 +1060,39 @@ object RedditPostActions {
 		return toolbar
 	}
 
+	/**
+	 * Reverts the optimistic change applied for [action] when the network request fails.
+	 *
+	 * Only the field(s) actually touched by [action] are restored: vote actions restore the
+	 * previous vote direction ([lastVoteDirection], using the -1/0/1 convention from
+	 * [RedditPreparedPost.getVoteDirection]), save/hide actions restore the previous save/hide
+	 * state. A vote failure must never touch the saved state, and vice versa.
+	 */
+	internal fun revertPostActionOnFailure(
+		changeDataManager: RedditChangeDataManager,
+		idAndType: RedditIdAndType,
+		@RedditAction action: Int,
+		lastVoteDirection: Int,
+		now: TimestampUTC
+	) {
+		when (action) {
+			RedditAPI.ACTION_DOWNVOTE, RedditAPI.ACTION_UNVOTE, RedditAPI.ACTION_UPVOTE ->
+				when (lastVoteDirection) {
+					-1 -> changeDataManager.markDownvoted(now, idAndType)
+					0 -> changeDataManager.markUnvoted(now, idAndType)
+					1 -> changeDataManager.markUpvoted(now, idAndType)
+				}
+
+			RedditAPI.ACTION_SAVE -> changeDataManager.markSaved(now, idAndType, false)
+			RedditAPI.ACTION_UNSAVE -> changeDataManager.markSaved(now, idAndType, true)
+			RedditAPI.ACTION_HIDE -> changeDataManager.markHidden(now, idAndType, false)
+			RedditAPI.ACTION_UNHIDE -> changeDataManager.markHidden(now, idAndType, true)
+			RedditAPI.ACTION_REPORT -> {}
+			RedditAPI.ACTION_DELETE -> {}
+			else -> throw RuntimeException("Unknown post action $action")
+		}
+	}
+
 	fun action(
 		post: RedditPreparedPost,
 		activity: BaseActivity,
@@ -1138,25 +1172,13 @@ object RedditPostActions {
 				}
 
 				private fun revertOnFailure() {
-					@Suppress("NAME_SHADOWING") val now = TimestampUTC.now()
-					when (action) {
-						RedditAPI.ACTION_DOWNVOTE, RedditAPI.ACTION_UNVOTE, RedditAPI.ACTION_UPVOTE -> {
-							when (lastVoteDirection) {
-								-1 -> changeDataManager.markDownvoted(now, post.src.idAndType)
-								0 -> changeDataManager.markUnvoted(now, post.src.idAndType)
-								1 -> changeDataManager.markUpvoted(now, post.src.idAndType)
-							}
-							changeDataManager.markSaved(now, post.src.idAndType, false)
-						}
-
-						RedditAPI.ACTION_SAVE -> changeDataManager.markSaved(now, post.src.idAndType, false)
-						RedditAPI.ACTION_UNSAVE -> changeDataManager.markSaved(now, post.src.idAndType, true)
-						RedditAPI.ACTION_HIDE -> changeDataManager.markHidden(now, post.src.idAndType, false)
-						RedditAPI.ACTION_UNHIDE -> changeDataManager.markHidden(now, post.src.idAndType, true)
-						RedditAPI.ACTION_REPORT -> {}
-						RedditAPI.ACTION_DELETE -> {}
-						else -> throw java.lang.RuntimeException("Unknown post action $action")
-					}
+					revertPostActionOnFailure(
+						changeDataManager,
+						post.src.idAndType,
+						action,
+						lastVoteDirection,
+						TimestampUTC.now()
+					)
 				}
 			}, user, post.src.idAndType, action, activity
 		)
